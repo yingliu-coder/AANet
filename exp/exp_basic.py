@@ -39,21 +39,6 @@ class Exp_Basic(object):
             'TimeXer': TimeXer,
             'AANet': AANet
         }
-        if args.model == 'TimeVLM':
-            from src.TimeVLM import model as TimeVLM
-            self.model_dict['TimeVLM'] = TimeVLM
-        if args.model == 'TimeTV':
-            from src.TimeTV import model as TimeTV
-            self.model_dict['TimeTV'] = TimeTV
-        if args.model == 'SSformer':
-            from src.SSformer import model as SSformer
-            self.model_dict['SSformer'] = SSformer
-        if args.model == 'TimeTest':
-            from src.TimeTest import model as TimeTest
-            self.model_dict['TimeTest'] = TimeTest
-        if args.model == 'Lagformer':
-            from src.Lagformer import model as Lagformer
-            self.model_dict['Lagformer'] = Lagformer
 
         self.device = self._acquire_device()
         self.model = self._build_model().to(self.device)
