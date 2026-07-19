@@ -38,10 +38,10 @@ class ChannelPatchEmbedding(nn.Module):
         if N == self.position_embedding.size(2):
             return self.position_embedding
 
-        pos = self.position_embedding.squeeze(1)      # [1, N0, d]
-        pos = pos.transpose(1, 2)                     # [1, d, N0]
+        pos = self.position_embedding.squeeze(1) 
+        pos = pos.transpose(1, 2)  
         pos = F.interpolate(pos, size=N, mode="linear", align_corners=False)
-        pos = pos.transpose(1, 2).unsqueeze(1)        # [1, 1, N, d]
+        pos = pos.transpose(1, 2).unsqueeze(1)      
         return pos
 
     def forward(self, x):
@@ -82,7 +82,6 @@ class TemporalEncoderBlock(nn.Module):
         )
 
     def forward(self, x):
-        # x: [B * D, N, d_model]
         attn_out, _ = self.attn(x, x, x, need_weights=False)
         x = self.norm1(x + self.dropout(attn_out))
 
@@ -93,16 +92,6 @@ class TemporalEncoderBlock(nn.Module):
 
 
 class VariableClustering(nn.Module):
-    """
-    Differentiable variable clustering.
-
-    Input:
-        H: [B, D, N, d_model]
-
-    Output:
-        P: [B, D, K]
-    """
-
     def __init__(self, d_model, cluster_dim, num_clusters, tau_c=1.0):
         super().__init__()
 
@@ -117,28 +106,14 @@ class VariableClustering(nn.Module):
         nn.init.trunc_normal_(self.centers, std=0.02)
 
     def forward(self, H):
-        # variable descriptor: [B, D, d_model]
         z = H.mean(dim=2)
-
-        # [B, D, d_c]
         z = self.proj(z)
-
-        # squared Euclidean distance: [B, D, K]
         dist = torch.cdist(z, self.centers.unsqueeze(0), p=2) ** 2
-
-        # soft assignment: [B, D, K]
         P = torch.softmax(-dist / self.tau_c, dim=-1)
-
         return P
 
     @staticmethod
     def balance_loss(P):
-        """
-        Cluster balance loss:
-            L2 = 1/K sum_k (K * p_bar_k - 1)^2
-
-        P: [B, D, K]
-        """
         K = P.size(-1)
         p_bar = P.mean(dim=1)  # [B, K]
         loss = ((K * p_bar - 1.0) ** 2).mean()
@@ -146,24 +121,6 @@ class VariableClustering(nn.Module):
 
 
 class EfficientAsynchronousAlignment(nn.Module):
-    """
-    Cluster-prototype asynchronous alignment.
-
-    This module approximates pair-wise variable interaction by soft cluster prototypes,
-    reducing complexity from O(D^2) to O(DK).
-
-    It still follows:
-        Q_i = W_Q H_i
-        K_j = W_K H_j
-        V_j = W_V H_j
-        lag-aware score
-        adaptive routing
-        R_i = sum_j sum_delta w_ij alpha_ij^delta Shift(V_j, delta)
-
-    The difference is that variables j are aggregated into differentiable cluster
-    prototypes weighted by P.
-    """
-
     def __init__(
         self,
         d_model,
@@ -194,13 +151,6 @@ class EfficientAsynchronousAlignment(nn.Module):
 
     @staticmethod
     def shift(x, delta):
-        """
-        Shift along patch dimension.
-
-        x: [B, C, N, d]
-        return:
-            shifted x with the same shape
-        """
         if delta == 0:
             return x
 
@@ -211,10 +161,8 @@ class EfficientAsynchronousAlignment(nn.Module):
             return y
 
         if delta > 0:
-            # y[t] = x[t + delta]
             y[..., :N - delta, :] = x[..., delta:, :]
         else:
-            # y[t] = x[t + delta]
             delta_abs = -delta
             y[..., delta_abs:, :] = x[..., :N - delta_abs, :]
 
@@ -222,11 +170,7 @@ class EfficientAsynchronousAlignment(nn.Module):
 
     @staticmethod
     def valid_mean(x, delta):
-        """
-        x: [B, D, K, N]
-        """
         N = x.size(-1)
-
         if abs(delta) >= N:
             return x.new_zeros(x.size(0), x.size(1), x.size(2))
 
@@ -238,34 +182,18 @@ class EfficientAsynchronousAlignment(nn.Module):
             return x.mean(dim=-1)
 
     def forward(self, H, P):
-        """
-        H: [B, D, N, d_model]
-        P: [B, D, K]
-
-        Return:
-            R:      [B, D, N, d_model]
-            route:  [B, D, K]
-            alpha:  [B, D, K, S]
-        """
         B, D, N, _ = H.shape
         K = P.size(-1)
 
-        q = self.q_proj(H)      # [B, D, N, qk_dim]
-        k_var = self.k_proj(H)  # [B, D, N, qk_dim]
-        v_var = self.v_proj(H)  # [B, D, N, d_model]
+        q = self.q_proj(H)
+        k_var = self.k_proj(H)
+        v_var = self.v_proj(H) 
 
-        # unnormalized cluster sums
-        # [B, K, N, qk_dim]
         k_sum = torch.einsum("bdk,bdnh->bknh", P, k_var)
-
-        # [B, K, N, d_model]
         v_sum = torch.einsum("bdk,bdnh->bknh", P, v_var)
-
-        # [B, K]
         denom_all = P.sum(dim=1).clamp_min(self.eps)
 
         if self.exclude_self:
-            # [B, D, K]
             denom = (denom_all.unsqueeze(1) - P).clamp_min(self.eps)
         else:
             denom = denom_all.unsqueeze(1).expand(B, D, K).clamp_min(self.eps)
@@ -278,24 +206,18 @@ class EfficientAsynchronousAlignment(nn.Module):
         scale = math.sqrt(self.qk_dim)
 
         for delta in lags:
-            k_sum_shift = self.shift(k_sum, delta)      # [B, K, N, qk_dim]
-            v_sum_shift = self.shift(v_sum, delta)      # [B, K, N, d_model]
-
-            # score between target variable and cluster prototype
-            # total score numerator: [B, D, K, N]
+            k_sum_shift = self.shift(k_sum, delta) 
+            v_sum_shift = self.shift(v_sum, delta)
             total_score = torch.einsum("bdnh,bknh->bdkn", q, k_sum_shift)
 
             if self.exclude_self:
-                k_self_shift = self.shift(k_var, delta)  # [B, D, N, qk_dim]
-                self_score = (q * k_self_shift).sum(dim=-1)  # [B, D, N]
-
-                # remove variable i from its own source cluster
+                k_self_shift = self.shift(k_var, delta)
+                self_score = (q * k_self_shift).sum(dim=-1)
                 total_score = total_score - P.unsqueeze(-1) * self_score.unsqueeze(2)
 
             total_score = total_score / denom.unsqueeze(-1)
             total_score = total_score / scale
 
-            # [B, D, K]
             score_delta = self.valid_mean(total_score, delta)
 
             score_list.append(score_delta)
@@ -304,41 +226,22 @@ class EfficientAsynchronousAlignment(nn.Module):
             if self.exclude_self:
                 shifted_v_self_list.append(self.shift(v_var, delta))
 
-        # [B, D, K, S]
         scores = torch.stack(score_list, dim=-1)
-
-        # lag distribution alpha_{i,k}^{Delta}
         alpha = torch.softmax(scores / self.tau_lag, dim=-1)
-
-        # expected lag-aware score
-        r_bar = (alpha * scores).sum(dim=-1)  # [B, D, K]
-
-        # cluster prior for target variable i
-        # p_{i,k} corresponds to cluster-level similarity between target i and cluster k
+        r_bar = (alpha * scores).sum(dim=-1) 
         cluster_prior = torch.log(P.clamp_min(self.eps))
-
-        # adaptive routing score
         u = r_bar + self.lambda_cluster * cluster_prior
 
-        # routing weight over K source clusters
-        route = torch.softmax(u / self.tau_r, dim=-1)  # [B, D, K]
+        route = torch.softmax(u / self.tau_r, dim=-1)
         route = self.dropout(route)
-
-        # context R_i
         R = H.new_zeros(B, D, N, self.d_model)
 
         for s, _ in enumerate(lags):
-            coeff = route * alpha[..., s]  # [B, D, K]
-
-            # normalize by cluster size after self-exclusion
-            norm_coeff = coeff / denom  # [B, D, K]
-
-            # contribution from cluster sums
-            # [B, D, N, d_model]
+            coeff = route * alpha[..., s] 
+            norm_coeff = coeff / denom
             ctx = torch.einsum("bdk,bknh->bdnh", norm_coeff, shifted_v_sum_list[s])
 
             if self.exclude_self:
-                # remove self contribution exactly
                 self_coeff = (norm_coeff * P).sum(dim=-1)  # [B, D]
                 ctx = ctx - self_coeff.unsqueeze(-1).unsqueeze(-1) * shifted_v_self_list[s]
 
@@ -348,13 +251,6 @@ class EfficientAsynchronousAlignment(nn.Module):
 
 
 class FusionAttention(nn.Module):
-    """
-    Cross-attention fusion:
-        O_i = CrossAttn(H_i, R_i, R_i)
-        g_i = sigmoid(W_g [H_i; O_i])
-        H_hat_i = LN(H_i + g_i * O_i)
-    """
-
     def __init__(self, d_model, n_heads, dropout=0.1):
         super().__init__()
 
@@ -385,15 +281,6 @@ class FusionAttention(nn.Module):
 
 
 class FlattenPredictionHead(nn.Module):
-    """
-    Shared prediction head for all variables.
-
-    Input:
-        H: [B, D, N, d_model]
-    Output:
-        y: [B, pred_len, D]
-    """
-
     def __init__(self, patch_num, d_model, pred_len, dropout=0.1):
         super().__init__()
         self.dropout = nn.Dropout(dropout)
@@ -404,30 +291,13 @@ class FlattenPredictionHead(nn.Module):
 
         H = self.dropout(H)
         H = H.reshape(B, D, N * d)
-
-        # [B, D, pred_len]
         y = self.proj(H)
-
-        # [B, pred_len, D]
         y = y.permute(0, 2, 1).contiguous()
 
         return y
 
 
 class Model(nn.Module):
-    """
-    CAformer for long-term / short-term multivariate time series forecasting.
-
-    Main modules:
-        1. Channel-independent patch embedding
-        2. Temporal encoder
-        3. Differentiable variable clustering
-        4. Lag-aware asynchronous alignment
-        5. Adaptive routing
-        6. Fusion attention
-        7. Prediction head
-    """
-
     def __init__(self, configs):
         super(Model, self).__init__()
 
@@ -445,9 +315,6 @@ class Model(nn.Module):
         dropout = configs.dropout
         activation = configs.activation
 
-        # -------------------------
-        # CAformer-specific configs
-        # -------------------------
         self.patch_len = getattr(configs, "patch_len", 16)
         self.stride = getattr(configs, "stride", 8)
 
@@ -468,14 +335,12 @@ class Model(nn.Module):
         self.lambda_cluster = getattr(configs, "ca_lambda", 0.5)
         self.exclude_self = getattr(configs, "ca_exclude_self", True)
 
-        # Normalization
         self.normalize_layers = Normalize(
             self.enc_in,
             affine=True,
             non_norm=True if configs.use_norm == 0 else False
         )
 
-        # 1. Multivariate Time Series Embedding
         self.patch_embedding = ChannelPatchEmbedding(
             seq_len=self.seq_len,
             patch_len=self.patch_len,
@@ -487,7 +352,6 @@ class Model(nn.Module):
 
         patch_num = self.patch_embedding.patch_num
 
-        # 2. Temporal encoder
         self.temporal_encoder = nn.ModuleList([
             TemporalEncoderBlock(
                 d_model=d_model,
@@ -499,7 +363,6 @@ class Model(nn.Module):
             for _ in range(configs.e_layers)
         ])
 
-        # 3. Variable clustering
         self.variable_clustering = VariableClustering(
             d_model=d_model,
             cluster_dim=self.cluster_dim,
@@ -507,7 +370,6 @@ class Model(nn.Module):
             tau_c=self.tau_c
         )
 
-        # 4-5. Asynchronous alignment + adaptive routing
         self.async_alignment = EfficientAsynchronousAlignment(
             d_model=d_model,
             qk_dim=self.qk_dim,
@@ -519,14 +381,12 @@ class Model(nn.Module):
             exclude_self=self.exclude_self
         )
 
-        # 6. Fusion attention
         self.fusion_attention = FusionAttention(
             d_model=d_model,
             n_heads=n_heads,
             dropout=dropout
         )
 
-        # 7. Prediction head
         self.prediction_head = FlattenPredictionHead(
             patch_num=patch_num,
             d_model=d_model,
@@ -542,46 +402,27 @@ class Model(nn.Module):
         return self._aux_loss
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        """
-        x_enc: [B, L, D]
-        return:
-            dec_out: [B, pred_len, D]
-        """
         B, L, D = x_enc.shape
-
-        # Normalize
         x_enc = self.normalize_layers(x_enc, "norm")
-
-        # 1. Patch embedding
-        # H: [B, D, N, d_model]
         H = self.patch_embedding(x_enc)
 
         B, D, N, d = H.shape
 
-        # 2. Temporal encoder independently for each variable
         H_flat = H.reshape(B * D, N, d)
 
         for block in self.temporal_encoder:
             H_flat = block(H_flat)
 
         H = H_flat.reshape(B, D, N, d)
-
-        # 3. Differentiable variable clustering
         P = self.variable_clustering(H)
 
-        # cluster regularization loss
         self._aux_loss = self.variable_clustering.balance_loss(P)
 
-        # 4-5. Asynchronous alignment and adaptive routing
         R, route, alpha, r_bar = self.async_alignment(H, P)
 
-        # 6. Fusion attention
         H_hat = self.fusion_attention(H, R)
 
-        # 7. Prediction
         dec_out = self.prediction_head(H_hat)
-
-        # Denormalize
         dec_out = self.normalize_layers(dec_out, "denorm")
         dec_out = dec_out[:, -self.pred_len:, :]
 
@@ -598,8 +439,6 @@ class Model(nn.Module):
         if self.task_name in ["long_term_forecast", "short_term_forecast"]:
             dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
 
-            # During training, return auxiliary clustering loss together.
-            # This is more robust for DataParallel than storing loss only as an attribute.
             if self.training:
                 return dec_out, self._aux_loss
 
