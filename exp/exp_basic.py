@@ -2,7 +2,7 @@ import os
 import torch
 from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer, DLinear, FEDformer, \
     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM, iTransformer, \
-    Koopa, TiDE, FreTS, TimeMixer, TSMixer, SegRNN, MambaSimple, TemporalFusionTransformer, SCINet, PAttn, TimeXer,TimeLLM,VisionTS
+    Koopa, TiDE, FreTS, TimeMixer, TSMixer, SegRNN, MambaSimple, TemporalFusionTransformer, SCINet, PAttn, TimeXer,TimeLLM, VisionTS, AANet
 
 class Exp_Basic(object):
     def __init__(self, args):
@@ -36,7 +36,8 @@ class Exp_Basic(object):
             'TemporalFusionTransformer': TemporalFusionTransformer,
             "SCINet": SCINet,
             'PAttn': PAttn,
-            'TimeXer': TimeXer
+            'TimeXer': TimeXer,
+            'AANet': AANet
         }
         if args.model == 'TimeVLM':
             from src.TimeVLM import model as TimeVLM
